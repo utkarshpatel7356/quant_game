@@ -4,9 +4,16 @@ import Chart from "./components/Chart";
 import Controls from "./components/Controls";
 import Scoreboard from "./components/Scoreboard";
 import Timer from "./components/Timer";
+import StartScreen from "./components/StartScreen"; // IMPORTED
+import Leaderboard from "./components/Leaderboard"; // IMPORTED
 
 export default function App() {
   const { price, priceHistory } = usePriceFeed();
+
+  // --- NEW STATE FOR ADDONS ---
+  const [view, setView] = useState("START"); // 'START', 'GAME', 'LEADERBOARD'
+  const [user, setUser] = useState(null); // Stores { username, high_score }
+  // ---------------------------
 
   const [gameStarted, setGameStarted] = useState(false);
   const [position, setPosition] = useState(null); // "LONG" or "SHORT"
@@ -18,12 +25,9 @@ export default function App() {
   const [gameOver, setGameOver] = useState(false);
 
   // ---------------------------------------------------------
-  // FIX: SEPARATED TIMER LOGIC
+  // 1. The Clock
   // ---------------------------------------------------------
-  
-  // 1. The Clock (Runs independently of price)
   useEffect(() => {
-    // Do not run if game hasn't started or is over
     if (!gameStarted || gameOver) return;
 
     const id = setInterval(() => {
@@ -34,30 +38,53 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(id);
-  }, [gameStarted, gameOver]); // Removed 'price' so timer doesn't reset!
+  }, [gameStarted, gameOver]);
 
-  // 2. The Game Over Check (Watches time and price)
+  // ---------------------------------------------------------
+  // 2. The Game Over Check (Updated with API Saving)
+  // ---------------------------------------------------------
   useEffect(() => {
     if (timeLeft === 0 && !gameOver && gameStarted) {
-      // Time is up! Close positions.
+      let finalRoundScore = score; // Current realized score
+
+      // Calculate pending PnL to add to final score
       if (position === "LONG") {
         const finalPnl = price - entryPrice;
+        finalRoundScore += finalPnl;
         setScore((prev) => prev + finalPnl);
       } else if (position === "SHORT") {
         const finalPnl = entryPrice - price;
+        finalRoundScore += finalPnl;
         setScore((prev) => prev + finalPnl);
       }
+
+      // Reset positions
       setPnl(0);
       setPosition(null);
       setEntryPrice(null);
       setGameOver(true);
       setGameStarted(false);
+
+      // --- NEW: SAVE SCORE TO DATABASE ---
+      if (user) {
+        // 1. Send to API
+        fetch('/api/save-score', {
+          method: 'POST',
+          body: JSON.stringify({ username: user.username, score: finalRoundScore })
+        });
+
+        // 2. Update local high score immediately for UI
+        if (finalRoundScore > user.high_score) {
+          setUser(prev => ({ ...prev, high_score: finalRoundScore }));
+        }
+      }
+      // -----------------------------------
     }
-  }, [timeLeft, gameOver, gameStarted, position, price, entryPrice]);
+  }, [timeLeft, gameOver, gameStarted, position, price, entryPrice]); // eslint-disable-line
 
   // ---------------------------------------------------------
-
   // REALTIME UNREALIZED PnL
+  // ---------------------------------------------------------
   useEffect(() => {
     if (position === "LONG" && entryPrice !== null) {
       setPnl(price - entryPrice);
@@ -66,11 +93,11 @@ export default function App() {
     }
   }, [price, position, entryPrice]);
 
+  // ---------------------------------------------------------
   // ACTIONS
+  // ---------------------------------------------------------
   const buy = () => {
-    if (!gameStarted) {
-      setGameStarted(true);
-    }
+    if (!gameStarted) setGameStarted(true);
 
     if (!position && !gameOver) {
       setPosition("LONG");
@@ -80,9 +107,7 @@ export default function App() {
   };
 
   const sell = () => {
-    if (!gameStarted) {
-      setGameStarted(true);
-    }
+    if (!gameStarted) setGameStarted(true);
 
     if (!position && !gameOver) {
       // Open SHORT position
@@ -125,14 +150,38 @@ export default function App() {
     setEntryPrice(null);
   };
 
+  // ---------------------------------------------------------
+  // VIEW ROUTING
+  // ---------------------------------------------------------
+
+  if (view === "START") {
+    return <StartScreen 
+      onStart={(userData) => { setUser(userData); setView("GAME"); }} 
+      onShowLeaderboard={() => setView("LEADERBOARD")}
+    />;
+  }
+
+  if (view === "LEADERBOARD") {
+    return <Leaderboard onBack={() => setView("START")} />;
+  }
+
+  // GAME VIEW
   return (
     <div className="min-h-screen bg-gray-900 p-6">
       <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-6">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-green-400 bg-clip-text text-transparent">
-            🎯 Quant Trading Game
-          </h1>
-          <p className="text-gray-400 mt-2">Trade the market and maximize your profit!</p>
+        
+        {/* HEADER WITH USER INFO */}
+        <div className="flex justify-between items-end mb-6">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-green-400 bg-clip-text text-transparent">
+              🎯 Quant Trading Game
+            </h1>
+            <p className="text-gray-400 mt-2">Player: <span className="text-white font-bold">{user?.username}</span></p>
+          </div>
+          <div className="text-right">
+             <div className="text-xs text-gray-500 uppercase">Your Best</div>
+             <div className="text-xl font-mono text-yellow-400">${user?.high_score?.toFixed(2)}</div>
+          </div>
         </div>
 
         <Chart data={priceHistory} />
@@ -172,11 +221,24 @@ export default function App() {
                 </span>
               </p>
             </div>
-            <button 
-              className="bg-blue-600 hover:bg-blue-700 px-8 py-3 rounded-lg font-semibold text-lg transition text-white shadow-lg shadow-blue-500/50" 
-              onClick={restart}
-            >
-              🔄 Restart Game
+            
+            <div className="flex justify-center gap-4">
+              <button 
+                className="bg-blue-600 hover:bg-blue-700 px-8 py-3 rounded-lg font-semibold text-lg transition text-white shadow-lg shadow-blue-500/50" 
+                onClick={restart}
+              >
+                🔄 Restart
+              </button>
+              <button 
+                className="bg-gray-700 hover:bg-gray-600 px-8 py-3 rounded-lg font-semibold text-lg transition text-white" 
+                onClick={() => setView("LEADERBOARD")}
+              >
+                🏆 Leaderboard
+              </button>
+            </div>
+            
+            <button onClick={() => setView("START")} className="mt-6 text-gray-500 underline text-sm">
+              Log out / Change User
             </button>
           </div>
         )}
